@@ -1,3 +1,5 @@
+import os
+import random
 from typing import Literal
 
 from langchain_core.messages import AIMessage
@@ -87,7 +89,7 @@ agent = create_react_agent(
 )
 
 
-def toxicity_guardrail(state: MessagesState) -> Command[Literal["agent", "__end__"]]:
+def toxicity_guardrail(state: MessagesState) -> Command[Literal["error_injection", "__end__"]]:
     """Check the latest user message for toxic content."""
     last_human = None
     for msg in reversed(state["messages"]):
@@ -96,7 +98,7 @@ def toxicity_guardrail(state: MessagesState) -> Command[Literal["agent", "__end_
             break
 
     if last_human is None:
-        return Command(goto="agent")
+        return Command(goto="error_injection")
 
     result = toxicity_classifier.invoke(
         TOXICITY_PROMPT.format(message=last_human)
@@ -108,7 +110,23 @@ def toxicity_guardrail(state: MessagesState) -> Command[Literal["agent", "__end_
             update={"messages": [AIMessage(content=REFUSAL_MESSAGE)]},
         )
 
-    return Command(goto="agent")
+    return Command(goto="error_injection")
+
+
+_ERROR_RATE = float(os.environ.get("FINANCE_QA_ERROR_RATE", "0"))
+
+_SIMULATED_ERRORS = [
+    TimeoutError("LLM request timed out after 30s"),
+    ConnectionError("Knowledge base unavailable: connection refused"),
+    ValueError("Empty response from model"),
+]
+
+
+def maybe_inject_error(state: MessagesState) -> MessagesState:
+    """Randomly raise an error to produce realistic failure traces."""
+    if _ERROR_RATE > 0 and random.random() < _ERROR_RATE:
+        raise random.choice(_SIMULATED_ERRORS)
+    return state
 
 
 memory = MemorySaver()
@@ -116,8 +134,10 @@ memory = MemorySaver()
 chatbot = (
     StateGraph(MessagesState)
     .add_node("toxicity_guardrail", toxicity_guardrail)
+    .add_node("error_injection", maybe_inject_error)
     .add_node("agent", agent)
     .add_edge(START, "toxicity_guardrail")
+    .add_edge("error_injection", "agent")
     .add_edge("agent", END)
     .compile(checkpointer=memory)
 )
