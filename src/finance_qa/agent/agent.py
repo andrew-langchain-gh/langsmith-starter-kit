@@ -141,3 +141,22 @@ chatbot = (
     .add_edge("agent", END)
     .compile(checkpointer=memory)
 )
+
+
+def create_chatbot(chat_model):
+    """Create a chatbot graph with the given chat model."""
+    react_agent = create_react_agent(
+        chat_model,
+        tools=[search_kb_tool, get_topic_details, list_topics],
+        prompt=system_prompt,
+    )
+    return (
+        StateGraph(MessagesState)
+        .add_node("toxicity_guardrail", toxicity_guardrail)
+        .add_node("error_injection", maybe_inject_error)
+        .add_node("agent", react_agent)
+        .add_edge(START, "toxicity_guardrail")
+        .add_edge("error_injection", "agent")
+        .add_edge("agent", END)
+        .compile(checkpointer=MemorySaver())
+    )
